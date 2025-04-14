@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Chat de Texto e Voz</title>
+</head>
+<body>
+  <h2>Chat de Texto</h2>
+  <div id="chat"></div>
+  <input id="mensagem" placeholder="Digite..." />
+  <button onclick="enviar()">Enviar</button>
+
+  <h2>Chat de Voz</h2>
+  <button onclick="iniciarAudio()">Iniciar Áudio</button>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
