@@ -1,145 +1,126 @@
 const socket = io();
-    const chat = document.getElementById('chat');
-    let screenStream = null;
+const roomId = "sala-principal"; // pode trocar por ID dinâmico
 
-    // Enviar mensagem de chat
-    function enviar() {
-      const msg = document.getElementById('mensagem').value;
-      socket.emit('mensagem', msg);
-      document.getElementById('mensagem').value = '';
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+
+let localStream;
+let peers = {};
+
+(async () => {
+  // Captura áudio/vídeo local
+  localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+  localVideo.srcObject = localStream;
+
+  socket.emit('join-room', roomId);
+})();
+
+socket.on('user-joined', async (userId) => {
+  const peer = createPeer(userId, true);
+  peers[userId] = peer;
+});
+
+socket.on('offer', async ({ from, offer }) => {
+  const peer = createPeer(from, false);
+  await peer.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await peer.createAnswer();
+  await peer.setLocalDescription(answer);
+  socket.emit('answer', { to: from, answer });
+});
+
+socket.on('answer', async ({ from, answer }) => {
+  await peers[from]?.setRemoteDescription(new RTCSessionDescription(answer));
+});
+
+socket.on('candidate', async ({ from, candidate }) => {
+  await peers[from]?.addIceCandidate(new RTCIceCandidate(candidate));
+});
+
+socket.on('user-disconnected', id => {
+  if (peers[id]) {
+    peers[id].close();
+    delete peers[id];
+  }
+});
+
+// Cria conexão com outro peer
+function createPeer(id, isInitiator) {
+  const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  const peer = new RTCPeerConnection(config);
+
+  localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
+
+  peer.onicecandidate = e => {
+    if (e.candidate) {
+      socket.emit('candidate', { to: id, candidate: e.candidate });
     }
+  };
 
-    // Receber e exibir mensagem de chat
-    socket.on('mensagem', msg => {
-      chat.innerHTML += `<p>${msg}</p>`;
+  peer.ontrack = e => {
+    remoteVideo.srcObject = e.streams[0];
+  };
+
+  if (isInitiator) {
+    peer.createOffer().then(offer => {
+      peer.setLocalDescription(offer);
+      socket.emit('offer', { to: id, offer });
     });
+  }
 
-    // --- WebRTC (áudio e vídeo) ---
-    let localStream;
-    let peerConnection;
-    const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  return peer;
+}
 
-    // Iniciar chamada de áudio
-    async function iniciarAudio() {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      peerConnection = new RTCPeerConnection(config);
 
-      localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-      });
-
-      peerConnection.ontrack = (e) => {
-        const remoteAudio = new Audio();
-        remoteAudio.srcObject = e.streams[0];
-        remoteAudio.play();
-
-        const remoteVideo = document.getElementById("remoteVideo");
-        remoteVideo.srcObject = e.streams[0];
-      };
-
-      peerConnection.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('candidate', e.candidate);
-        }
-      };
-
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      socket.emit('offer', offer);
+// Encerrar chamada
+function encerrarChamada() {
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
     }
+    alert("Chamada encerrada");
+  }
+}
 
-    // Responder a uma oferta de chamada
-    socket.on('offer', async offer => {
-      peerConnection = new RTCPeerConnection(config);
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+// Compartilhar tela
+async function compartilharTela() {
+  try {
+    // Captura a tela
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
 
-      localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-      });
+    // Exibe a tela localmente
+    const localVideo = document.getElementById("localVideo");
+    localVideo.srcObject = screenStream;
 
-      peerConnection.ontrack = (e) => {
-        const remoteAudio = new Audio();
-        remoteAudio.srcObject = e.streams[0];
-        remoteAudio.play();
-
-        const remoteVideo = document.getElementById("remoteVideo");
-        remoteVideo.srcObject = e.streams[0];
-      };
-
-      peerConnection.onicecandidate = (e) => {
-        if (e.candidate) {
-          socket.emit('candidate', e.candidate);
-        }
-      };
-
-      await peerConnection.setRemoteDescription(offer);
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      socket.emit('answer', answer);
-    });
-
-    socket.on('answer', async answer => {
-      await peerConnection.setRemoteDescription(answer);
-    });
-
-    socket.on('candidate', async candidate => {
-      if (peerConnection) {
-        await peerConnection.addIceCandidate(candidate);
+    // Substitui o vídeo da webcam pelo vídeo da tela no peerConnection
+    screenStream.getTracks().forEach(track => {
+      const sender = peerConnection.getSenders().find(s => s.track.kind === track.kind);
+      if (sender) {
+        sender.replaceTrack(track);
       }
     });
 
-    // Encerrar chamada
-    function encerrarChamada() {
-      if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-        if (localStream) {
-          localStream.getTracks().forEach(track => track.stop());
-        }
-        alert("Chamada encerrada");
-      }
-    }
+    alert("Transmitindo a tela");
 
-    // Compartilhar tela
-    async function compartilharTela() {
-      try {
-        // Captura a tela
-        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    // Quando o usuário parar de compartilhar a tela
+    screenStream.getVideoTracks()[0].onended = () => {
+      encerrarTela();
+    };
 
-        // Exibe a tela localmente
-        const localVideo = document.getElementById("localVideo");
-        localVideo.srcObject = screenStream;
+  } catch (err) {
+    console.error("Erro ao compartilhar a tela:", err);
+  }
+}
 
-        // Substitui o vídeo da webcam pelo vídeo da tela no peerConnection
-        screenStream.getTracks().forEach(track => {
-          const sender = peerConnection.getSenders().find(s => s.track.kind === track.kind);
-          if (sender) {
-            sender.replaceTrack(track);
-          }
-        });
-
-        alert("Transmitindo a tela");
-
-        // Quando o usuário parar de compartilhar a tela
-        screenStream.getVideoTracks()[0].onended = () => {
-          encerrarTela();
-        };
-
-      } catch (err) {
-        console.error("Erro ao compartilhar a tela:", err);
-      }
-    }
-
-    // Encerrar compartilhamento de tela
-    function encerrarTela() {
-      if (screenStream) {
-        screenStream.getTracks().forEach(track => track.stop());
-        screenStream = null;
-
-        // Opcionalmente, parar de mostrar no localVideo
-        const localVideo = document.getElementById("localVideo");
-        localVideo.srcObject = null;
-
-        alert("Compartilhamento de tela encerrado");
-      }
-    }
+// Encerrar compartilhamento de tela
+function encerrarChamada() {
+  for (const id in peers) {
+    peers[id].close();
+    delete peers[id];
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+  }
+  alert("Chamada encerrada");
+}
