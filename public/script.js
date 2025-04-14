@@ -1,5 +1,7 @@
 const socket = io();
 const chat = document.getElementById('chat');
+let screenStream = null;
+
 
 function enviar() {
   const msg = document.getElementById('mensagem').value;
@@ -76,3 +78,46 @@ socket.on('candidate', async candidate => {
     await peerConnection.addIceCandidate(candidate);
   }
 });
+
+function encerrarChamada() {
+  if (peerConnection) {
+    peerConnection.close();
+    peerConnection = null;
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+    }
+    alert("Chamada encerrada");
+  }
+}
+
+async function compartilharTela() {
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+    screenStream.getTracks().forEach(track => {
+      const sender = peerConnection.getSenders().find(s => s.track.kind === track.kind);
+      if (sender) {
+        sender.replaceTrack(track);
+      }
+    });
+
+    alert("Transmitindo a tela");
+
+    // Se o usuário parar manualmente pelo navegador
+    screenStream.getVideoTracks()[0].onended = () => {
+      encerrarTela();
+    };
+
+  } catch (err) {
+    console.error("Erro ao compartilhar a tela:", err);
+  }
+}
+
+function encerrarTela() {
+  if (screenStream) {
+    screenStream.getTracks().forEach(track => track.stop());
+    screenStream = null;
+    alert("Compartilhamento de tela encerrado");
+  }
+}
+
